@@ -155,7 +155,7 @@ class AdminClient(val time: Time,
       Some(group.members.map { member =>
         val assignment = ConsumerProtocol.deserializeAssignment(ByteBuffer.wrap(member.assignment))
         new ConsumerSummary(member.memberId, member.clientId, member.clientHost, assignment.partitions().asScala.toList)
-      })
+      }.sortBy(- _.assignment.size))
     } else {
       Some(List.empty)
     }

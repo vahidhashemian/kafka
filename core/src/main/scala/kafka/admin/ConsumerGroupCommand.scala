@@ -90,36 +90,54 @@ object ConsumerGroupCommand {
 
     protected def opts: ConsumerGroupCommandOptions
 
-    protected def getLogEndOffset(topic: String, partition: Int): LogEndOffsetResult
+    protected def getLogEndOffset(topicAndPartition: TopicAndPartition): LogEndOffsetResult
 
     protected def describeGroup(group: String): Unit
 
-    protected def describeTopicPartition(group: String,
-                                         topicPartitions: Seq[TopicAndPartition],
-                                         getPartitionOffset: TopicAndPartition => Option[Long],
-                                         getOwner: TopicAndPartition => Option[String]): Unit = {
-      topicPartitions
-        .sortBy { case topicPartition => topicPartition.partition }
-        .foreach { topicPartition =>
-          describePartition(group, topicPartition.topic, topicPartition.partition, getPartitionOffset(topicPartition),
-            getOwner(topicPartition))
-        }
+    protected def describeMemberTopicPartition(group: String,
+                                               topicPartitions: Seq[TopicAndPartition],
+                                               getPartitionOffset: TopicAndPartition => Option[Long],
+                                               memberId: Option[String],
+                                               memberHost: Option[String],
+                                               clientId: Option[String]): Unit = {
+      if (topicPartitions.isEmpty)
+        printDescribeResult(group, None, None, None, memberId, memberHost, clientId, None)
+      else
+        topicPartitions
+          .sortBy { case topicPartition => topicPartition.partition }
+          .foreach { topicPartition =>
+            describePartition(group, topicPartition.topic, topicPartition.partition, getPartitionOffset(topicPartition),
+              memberId, memberHost, clientId)
+          }
     }
 
     protected def printDescribeHeader() {
-      println("%-30s %-30s %-10s %-15s %-15s %-15s %s".format("GROUP", "TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "OWNER"))
+      println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format("GROUP", "TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "MEMBER-HOST", "CLIENT-ID"))
+    }
+    
+    protected def printDescribeResult(group: String,
+                                      topic: Option[String],
+                                      partition: Option[Int],
+                                      offsetOpt: Option[Long],
+                                      memberIdOpt: Option[String],
+                                      memberHostOpt: Option[String],
+                                      clientIdOpt: Option[String],
+                                      logEndOffset: Option[Long]) {
+        val lag = offsetOpt.filter(_ != -1).flatMap(offset => logEndOffset.map(_ - offset))
+        println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format(group, topic.getOrElse(""), partition.getOrElse(""), offsetOpt.getOrElse(""), logEndOffset.getOrElse(""), lag.getOrElse(""), memberIdOpt.getOrElse("none"), memberHostOpt.getOrElse(""), clientIdOpt.getOrElse("")))
     }
 
     private def describePartition(group: String,
                                   topic: String,
                                   partition: Int,
                                   offsetOpt: Option[Long],
-                                  ownerOpt: Option[String]) {
-      def print(logEndOffset: Option[Long]): Unit = {
-        val lag = offsetOpt.filter(_ != -1).flatMap(offset => logEndOffset.map(_ - offset))
-        println("%-30s %-30s %-10s %-15s %-15s %-15s %s".format(group, topic, partition, offsetOpt.getOrElse("unknown"), logEndOffset.getOrElse("unknown"), lag.getOrElse("unknown"), ownerOpt.getOrElse("none")))
-      }
-      getLogEndOffset(topic, partition) match {
+                                  memberIdOpt: Option[String],
+                                  memberHostOpt: Option[String],
+                                  clientIdOpt: Option[String]) {
+      def print(logEndOffset: Option[Long]): Unit =
+        printDescribeResult(group, Option(topic), Option(partition), offsetOpt, memberIdOpt, memberHostOpt, clientIdOpt, logEndOffset)
+      
+      getLogEndOffset(new TopicAndPartition(topic, partition)) match {
         case LogEndOffsetResult.LogEndOffset(logEndOffset) => print(Some(logEndOffset))
         case LogEndOffsetResult.Unknown => print(None)
         case LogEndOffsetResult.Ignore =>
@@ -156,47 +174,89 @@ object ConsumerGroupCommand {
       val props = if (opts.options.has(opts.commandConfigOpt)) Utils.loadProps(opts.options.valueOf(opts.commandConfigOpt)) else new Properties()
       val channelSocketTimeoutMs = props.getProperty("channelSocketTimeoutMs", "600").toInt
       val channelRetryBackoffMs = props.getProperty("channelRetryBackoffMsOpt", "300").toInt
+      if (!zkUtils.getConsumerGroups().contains(group)) {
+        println(s"The consumer group '$group' does not exist")
+        return
+      }
       val topics = zkUtils.getTopicsByConsumerGroup(group)
       if (topics.isEmpty)
-        println("No topic available for consumer group provided")
+        println(s"No topic available for consumer group '$group'")
       printDescribeHeader()
-      topics.foreach(topic => describeTopic(group, topic, channelSocketTimeoutMs, channelRetryBackoffMs))
-    }
 
-    private def describeTopic(group: String,
-                              topic: String,
-                              channelSocketTimeoutMs: Int,
-                              channelRetryBackoffMs: Int) {
-      val topicPartitions = getTopicPartitions(topic)
-      val groupDirs = new ZKGroupTopicDirs(group, topic)
-      val ownerByTopicPartition = topicPartitions.flatMap { topicPartition =>
-        zkUtils.readDataMaybeNull(groupDirs.consumerOwnerDir + "/" + topicPartition.partition)._1.map { owner =>
-          topicPartition -> owner
+      val topicPartitions = getTopicsPartitions(topics)
+      var groupMemberIds = zkUtils.getConsumersInGroup(group)
+
+      // mapping of topic partition -> ephemeral owner
+      val eOwnerByTopicPartition = mutable.Map[TopicAndPartition, Long]()
+      topicPartitions.foreach { topicPartition =>
+        val data = zkUtils.readDataMaybeNull(new ZKGroupTopicDirs(group, topicPartition.topic).consumerOwnerDir + "/" + topicPartition.partition)
+        val owner = data._1
+        if (!owner.isEmpty) {
+          val eOwner = data._2.getEphemeralOwner()
+          eOwnerByTopicPartition.put(topicPartition, eOwner)
         }
+      }
+
+      // mapping of ephemeral owner -> group member id
+      val memberIdByEOwner = groupMemberIds.flatMap { memberId =>
+        val eOwner = zkUtils.readDataMaybeNull(new ZKGroupDirs(group).consumerGroupDir + "/ids/" + memberId)._2.getEphemeralOwner()
+        Some(eOwner).map { eOwner => eOwner -> memberId }
       }.toMap
-      val partitionOffsets = getPartitionOffsets(group, topicPartitions, channelSocketTimeoutMs, channelRetryBackoffMs)
-      describeTopicPartition(group, topicPartitions, partitionOffsets.get, ownerByTopicPartition.get)
+
+      // mapping of topic partition -> member id
+      val memberIdByTopicPartition = eOwnerByTopicPartition.flatMap { case (topicPartition, eOwner) =>
+        val memberId = memberIdByEOwner.getOrElse(eOwner, "")
+        Some(memberId.toString()).map { memberId => topicPartition -> memberId }
+      }.toMap
+
+      // mapping of member id -> list of topic partitions
+      val memberTopicPartitions = memberIdByTopicPartition groupBy{_._2} map {
+        case (key, value) => (key, value.unzip._1.toArray) }
+
+      // mapping of member id -> list of subscribed topics
+      val topicsByMemberId = zkUtils.getTopicsPerMemberId(group, true)
+
+      topicPartitions.foreach { topicPartition =>
+        val partitionOffsets = getPartitionOffsets(group, List(topicPartition), channelSocketTimeoutMs, channelRetryBackoffMs)
+        val memberId = memberIdByTopicPartition.get(topicPartition)
+        // since member id is repeated in client id, leave member host and client id empty
+        describeMemberTopicPartition(group, List(topicPartition), partitionOffsets.get, memberId, None, None)
+        if (!memberId.isEmpty) {
+          groupMemberIds = groupMemberIds.filterNot { _ == memberId.get }
+        }
+      }
+
+      groupMemberIds.sortBy { - memberTopicPartitions.get(_).size }.foreach { memberId =>
+        topicsByMemberId(memberId).foreach { topic =>
+          // since members with no topic partitions are processed here, we pass empty for topic partitions and offsets
+          // since member id is repeated in client id, leave member host and client id empty
+          describeMemberTopicPartition(group, Array[TopicAndPartition](), Map[TopicAndPartition, Option[Long]](), Some(memberId), None, None)
+        }
+      }
     }
 
-    private def getTopicPartitions(topic: String): Seq[TopicAndPartition] = {
-      val topicPartitionMap = zkUtils.getPartitionsForTopics(Seq(topic))
-      val partitions = topicPartitionMap.getOrElse(topic, Seq.empty)
-      partitions.map(TopicAndPartition(topic, _))
+    private def getTopicsPartitions(topics: Seq[String]): Seq[TopicAndPartition] = {
+      val topicPartitionMap = zkUtils.getPartitionsForTopics(topics)
+      var topicPartitions: Seq[TopicAndPartition] = Seq.empty
+      topics.foreach { topic =>
+        val partitions = topicPartitionMap.getOrElse(topic, Seq.empty)
+        topicPartitions = topicPartitions ++ partitions.map(TopicAndPartition(topic, _))
+      }
+      topicPartitions
     }
 
-    protected def getLogEndOffset(topic: String, partition: Int): LogEndOffsetResult = {
-      zkUtils.getLeaderForPartition(topic, partition) match {
+    protected def getLogEndOffset(topicAndPartition: TopicAndPartition): LogEndOffsetResult = {
+      zkUtils.getLeaderForPartition(topicAndPartition.topic, topicAndPartition.partition) match {
         case Some(-1) => LogEndOffsetResult.Unknown
         case Some(brokerId) =>
           getZkConsumer(brokerId).map { consumer =>
-            val topicAndPartition = new TopicAndPartition(topic, partition)
             val request = OffsetRequest(Map(topicAndPartition -> PartitionOffsetRequestInfo(OffsetRequest.LatestTime, 1)))
             val logEndOffset = consumer.getOffsetsBefore(request).partitionErrorAndOffsets(topicAndPartition).offsets.head
             consumer.close()
             LogEndOffsetResult.LogEndOffset(logEndOffset)
           }.getOrElse(LogEndOffsetResult.Ignore)
         case None =>
-          println(s"No broker for partition ${new TopicPartition(topic, partition)}")
+          println(s"No broker for partition ${topicAndPartition}")
           LogEndOffsetResult.Ignore
       }
     }
@@ -317,16 +377,16 @@ object ConsumerGroupCommand {
                   topicPartition -> offsetAndMetadata.offset
                 }
               }.toMap
-              describeTopicPartition(group, topicPartitions, partitionOffsets.get,
-                _ => Some(s"${consumerSummary.clientId}_${consumerSummary.clientHost}"))
+              describeMemberTopicPartition(group, topicPartitions, partitionOffsets.get,
+                Some(s"${consumerSummary.memberId}"), Some(s"${consumerSummary.clientHost}"), Some(s"${consumerSummary.clientId}"))
             }
           }
       }
     }
 
-    protected def getLogEndOffset(topic: String, partition: Int): LogEndOffsetResult = {
+    protected def getLogEndOffset(topicAndPartition: TopicAndPartition): LogEndOffsetResult = {
       val consumer = getConsumer()
-      val topicPartition = new TopicPartition(topic, partition)
+      val topicPartition = new TopicPartition(topicAndPartition.topic, topicAndPartition.partition)
       consumer.assign(List(topicPartition).asJava)
       consumer.seekToEnd(List(topicPartition).asJava)
       val logEndOffset = consumer.position(topicPartition)

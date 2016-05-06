@@ -775,6 +775,17 @@ class ZkUtils(val zkClient: ZkClient,
     consumersPerTopicMap
   }
 
+  def getTopicsPerMemberId(group: String, excludeInternalTopics: Boolean) : mutable.Map[String, List[String]] = {
+    val dirs = new ZKGroupDirs(group)
+    val memberIds = getChildrenParentMayNotExist(dirs.consumerRegistryDir)
+    val topicsPerMemberIdMap = new mutable.HashMap[String, List[String]]
+    for (memberId <- memberIds) {
+      val topicCount = TopicCount.constructTopicCount(group, memberId, this, excludeInternalTopics)
+      topicsPerMemberIdMap.put(memberId, topicCount.getTopicCountMap.keySet.toList)
+    }
+    topicsPerMemberIdMap
+  }
+
   /**
    * This API takes in a broker id, queries zookeeper for the broker metadata and returns the metadata for that broker
    * or throws an exception if the broker dies before the query to zookeeper finishes
