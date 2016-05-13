@@ -43,6 +43,7 @@ import org.apache.kafka.common.requests.HeartbeatResponse;
 import org.apache.kafka.common.requests.JoinGroupResponse;
 import org.apache.kafka.common.requests.OffsetCommitRequest;
 import org.apache.kafka.common.requests.OffsetCommitResponse;
+import org.apache.kafka.common.requests.OffsetFetchResponse;
 import org.apache.kafka.common.requests.SyncGroupResponse;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -59,7 +60,9 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -203,7 +206,7 @@ public class KafkaConsumerTest {
         PartitionAssignor assignor = new RoundRobinAssignor();
 
         final KafkaConsumer<String, String> consumer = newConsumer(time, client, metadata, assignor,
-                sessionTimeoutMs, heartbeatIntervalMs, autoCommitIntervalMs);
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
 
         consumer.subscribe(Arrays.asList(topic), new ConsumerRebalanceListener() {
             @Override
@@ -272,7 +275,7 @@ public class KafkaConsumerTest {
         PartitionAssignor assignor = new RoundRobinAssignor();
 
         final KafkaConsumer<String, String> consumer = newConsumer(time, client, metadata, assignor,
-                sessionTimeoutMs, heartbeatIntervalMs, autoCommitIntervalMs);
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
         consumer.subscribe(Arrays.asList(topic), new ConsumerRebalanceListener() {
             @Override
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
@@ -343,7 +346,7 @@ public class KafkaConsumerTest {
         PartitionAssignor assignor = new RoundRobinAssignor();
 
         final KafkaConsumer<String, String> consumer = newConsumer(time, client, metadata, assignor,
-                sessionTimeoutMs, heartbeatIntervalMs, autoCommitIntervalMs);
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
         consumer.subscribe(Arrays.asList(topic), new ConsumerRebalanceListener() {
             @Override
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
@@ -421,7 +424,7 @@ public class KafkaConsumerTest {
         PartitionAssignor assignor = new RoundRobinAssignor();
 
         final KafkaConsumer<String, String> consumer = newConsumer(time, client, metadata, assignor,
-                sessionTimeoutMs, heartbeatIntervalMs, autoCommitIntervalMs);
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
         consumer.subscribe(Arrays.asList(topic), new ConsumerRebalanceListener() {
             @Override
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
@@ -469,6 +472,106 @@ public class KafkaConsumerTest {
         assertEquals(5, records.count());
     }
 
+    @Test
+    public void testUnsubscribedPartitionOffsetCommitWithAutoCommit() {
+        String topic1 = "topic1";
+        final TopicPartition partition1 = new TopicPartition(topic1, 0);
+        String topic2 = "topic2";
+
+        int sessionTimeoutMs = 30000;
+        int heartbeatIntervalMs = 3000;
+
+        // adjust auto commit interval lower than heartbeat so we don't need to deal with
+        // a concurrent heartbeat request
+        int autoCommitIntervalMs = 1000;
+
+        Time time = new MockTime();
+        MockClient client1 = new MockClient(time);
+
+        Map<String, Integer> tpCount = new HashMap<>();
+        tpCount.put(topic1, 1);
+        tpCount.put(topic2, 1);
+        Cluster cluster = TestUtils.singletonCluster(tpCount);
+        Node node = cluster.nodes().get(0);
+        client1.setNode(node);
+        Metadata metadata = new Metadata(0, Long.MAX_VALUE);
+        metadata.update(cluster, time.milliseconds());
+        PartitionAssignor assignor = new RoundRobinAssignor();
+
+        final KafkaConsumer<String, String> consumer1 = newConsumer(time, client1, metadata, assignor,
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
+                
+        consumer1.subscribe(Arrays.asList(topic1), new ConsumerRebalanceListener() {
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                for (TopicPartition partition: partitions)
+                    consumer1.seek(partition, 0);
+            }
+        });
+
+        // lookup coordinator
+        client1.prepareResponseFrom(new GroupCoordinatorResponse(Errors.NONE.code(), node).toStruct(), node);
+        Node coordinator = new Node(Integer.MAX_VALUE - node.id(), node.host(), node.port());
+
+        // join group
+        client1.prepareResponseFrom(joinGroupFollowerResponse(assignor, 1, "memberId", "leaderId", Errors.NONE.code()), coordinator);
+        // sync group
+        client1.prepareResponseFrom(syncGroupResponse(Arrays.asList(partition1), Errors.NONE.code()), coordinator);
+
+        consumer1.poll(0);
+        
+        // change consumer subscription
+        consumer1.subscribe(Arrays.asList(topic2));
+
+        // create another consumer/client that is subscribed to "topic"
+        MockClient client2 = new MockClient(time);
+        client2.setNode(node);
+        metadata.update(cluster, time.milliseconds());
+        final KafkaConsumer<String, String> consumer2 = newConsumer(time, client2, metadata, assignor,
+                sessionTimeoutMs, heartbeatIntervalMs, Boolean.TRUE, autoCommitIntervalMs);
+        consumer2.subscribe(Arrays.asList(topic1), new ConsumerRebalanceListener() {
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                for (TopicPartition partition: partitions)
+                    consumer2.seek(partition, 0);
+            }
+        });
+
+        // lookup coordinator
+        client2.prepareResponseFrom(new GroupCoordinatorResponse(Errors.NONE.code(), node).toStruct(), node);
+        // join group
+        client2.prepareResponseFrom(joinGroupFollowerResponse(assignor, 2, "memberId2", "leaderId", Errors.NONE.code()), coordinator);
+        // sync group
+        client2.prepareResponseFrom(syncGroupResponse(Arrays.asList(partition1), Errors.NONE.code()), coordinator);
+
+        consumer2.poll(0);
+
+        //client2.prepareResponse(offsetCommitResponse(Collections.singletonMap(partition, Errors.NONE.code())), true);
+        client2.prepareResponse(offsetFetchResponse(partition1, Errors.NONE.code(), "", 10L));
+        assertEquals(10L, consumer2.committed(partition1).offset());
+    }
+
+    private Struct offsetCommitResponse(Map<TopicPartition, Short> responseData) {
+        OffsetCommitResponse response = new OffsetCommitResponse(responseData);
+        return response.toStruct();
+    }
+
+    private Struct offsetFetchResponse(TopicPartition tp, Short error, String metadata, long offset) {
+        OffsetFetchResponse.PartitionData data = new OffsetFetchResponse.PartitionData(offset, metadata, error);
+        OffsetFetchResponse response = new OffsetFetchResponse(Collections.singletonMap(tp, data));
+        return response.toStruct();
+    }
+    
     private Struct joinGroupFollowerResponse(PartitionAssignor assignor, int generationId, String memberId, String leaderId, short error) {
         return new JoinGroupResponse(error, generationId, assignor.name(), memberId, leaderId,
                 Collections.<String, ByteBuffer>emptyMap()).toStruct();
@@ -495,6 +598,7 @@ public class KafkaConsumerTest {
                                                       PartitionAssignor assignor,
                                                       int sessionTimeoutMs,
                                                       int heartbeatIntervalMs,
+                                                      boolean autoCommitEnabled,
                                                       int autoCommitIntervalMs) {
         // create a consumer with mocked time and mocked network
 
@@ -503,7 +607,6 @@ public class KafkaConsumerTest {
         String metricGroupPrefix = "consumer";
         long retryBackoffMs = 100;
         long requestTimeoutMs = 30000;
-        boolean autoCommitEnabled = true;
         boolean excludeInternalTopics = true;
         int minBytes = 1;
         int maxWaitMs = 500;
@@ -569,6 +672,9 @@ public class KafkaConsumerTest {
                 subscriptions,
                 metadata,
                 retryBackoffMs,
+                autoCommitEnabled,
                 requestTimeoutMs);
     }
+
 }
+
