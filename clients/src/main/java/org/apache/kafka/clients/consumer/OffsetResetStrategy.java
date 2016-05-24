@@ -13,5 +13,5 @@
 package org.apache.kafka.clients.consumer;
 
 public enum OffsetResetStrategy {
-    LATEST, EARLIEST, NONE
+    LATEST, EARLIEST, NONE, LATEST_ON_START, EARLIEST_ON_START
 }

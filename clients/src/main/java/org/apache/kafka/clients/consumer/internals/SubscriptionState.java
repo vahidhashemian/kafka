@@ -300,7 +300,8 @@ public class SubscriptionState {
     }
 
     public boolean hasDefaultOffsetResetPolicy() {
-        return defaultResetStrategy != OffsetResetStrategy.NONE;
+        return (defaultResetStrategy == OffsetResetStrategy.EARLIEST) ||
+                (defaultResetStrategy == OffsetResetStrategy.LATEST);
     }
 
     public boolean isOffsetResetNeeded(TopicPartition partition) {

@@ -283,9 +283,9 @@ public class Fetcher<K, V> {
     private void resetOffset(TopicPartition partition) {
         OffsetResetStrategy strategy = subscriptions.resetStrategy(partition);
         final long timestamp;
-        if (strategy == OffsetResetStrategy.EARLIEST)
+        if ((strategy == OffsetResetStrategy.EARLIEST) || (strategy == OffsetResetStrategy.EARLIEST_ON_START))
             timestamp = ListOffsetRequest.EARLIEST_TIMESTAMP;
-        else if (strategy == OffsetResetStrategy.LATEST)
+        else if ((strategy == OffsetResetStrategy.LATEST) || (strategy == OffsetResetStrategy.LATEST_ON_START))
             timestamp = ListOffsetRequest.LATEST_TIMESTAMP;
         else
             throw new NoOffsetForPartitionException(partition);

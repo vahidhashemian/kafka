@@ -84,6 +84,7 @@ public class FetcherTest {
     private Cluster cluster = TestUtils.singletonCluster(topicName, 1);
     private Node node = cluster.nodes().get(0);
     private SubscriptionState subscriptions = new SubscriptionState(OffsetResetStrategy.EARLIEST);
+    private SubscriptionState subscriptionsEarliestOnStartReset = new SubscriptionState(OffsetResetStrategy.EARLIEST_ON_START);
     private SubscriptionState subscriptionsNoAutoReset = new SubscriptionState(OffsetResetStrategy.NONE);
     private Metrics metrics = new Metrics(time);
     private static final double EPSILON = 0.0001;
@@ -92,6 +93,8 @@ public class FetcherTest {
     private MemoryRecords records = MemoryRecords.emptyRecords(ByteBuffer.allocate(1024), CompressionType.NONE);
     private MemoryRecords nextRecords = MemoryRecords.emptyRecords(ByteBuffer.allocate(1024), CompressionType.NONE);
     private Fetcher<byte[], byte[]> fetcher = createFetcher(subscriptions, metrics);
+    private Metrics fetcherEOSMetrics = new Metrics(time);
+    private Fetcher<byte[], byte[]> fetcherEarliestOnStart = createFetcher(subscriptionsEarliestOnStartReset, fetcherEOSMetrics);
     private Metrics fetcherMetrics = new Metrics(time);
     private Fetcher<byte[], byte[]> fetcherNoAutoReset = createFetcher(subscriptionsNoAutoReset, fetcherMetrics);
 
@@ -129,6 +132,26 @@ public class FetcherTest {
         records = fetcher.fetchedRecords().get(tp);
         assertEquals(3, records.size());
         assertEquals(4L, (long) subscriptions.position(tp)); // this is the next fetching position
+        long offset = 1;
+        for (ConsumerRecord<byte[], byte[]> record : records) {
+            assertEquals(offset, record.offset());
+            offset += 1;
+        }
+    }
+
+    @Test
+    public void testFetchNormalWithEarliestOnStartOffsetReset() {
+        List<ConsumerRecord<byte[], byte[]>> records;
+        subscriptionsEarliestOnStartReset.assignFromUser(Arrays.asList(tp));
+        subscriptionsEarliestOnStartReset.seek(tp, 0);
+
+        // normal fetch
+        fetcherEarliestOnStart.sendFetches();
+        client.prepareResponse(fetchResponse(this.records.buffer(), Errors.NONE.code(), 100L, 0));
+        consumerClient.poll(0);
+        records = fetcherEarliestOnStart.fetchedRecords().get(tp);
+        assertEquals(3, records.size());
+        assertEquals(4L, (long) subscriptionsEarliestOnStartReset.position(tp)); // this is the next fetching position
         long offset = 1;
         for (ConsumerRecord<byte[], byte[]> record : records) {
             assertEquals(offset, record.offset());
@@ -321,6 +344,18 @@ public class FetcherTest {
         assertTrue(subscriptions.isOffsetResetNeeded(tp));
         assertEquals(0, fetcher.fetchedRecords().size());
         assertEquals(null, subscriptions.position(tp));
+    }
+
+    @Test(expected = OffsetOutOfRangeException.class)
+    public void testFetchOffsetOutOfRangeForEarliestOnStartAutoReset() {
+        subscriptionsEarliestOnStartReset.assignFromUser(Arrays.asList(tp));
+        subscriptionsEarliestOnStartReset.seek(tp, 0);
+
+        fetcherEarliestOnStart.sendFetches();
+        client.prepareResponse(fetchResponse(this.records.buffer(), Errors.OFFSET_OUT_OF_RANGE.code(), 100L, 0));
+        consumerClient.poll(0);
+        assertFalse(subscriptionsEarliestOnStartReset.isOffsetResetNeeded(tp));
+        fetcherEarliestOnStart.fetchedRecords();
     }
 
     @Test

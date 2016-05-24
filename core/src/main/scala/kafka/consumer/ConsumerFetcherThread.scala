@@ -79,6 +79,8 @@ class ConsumerFetcherThread(name: String,
     val startTimestamp = config.autoOffsetReset match {
       case OffsetRequest.SmallestTimeString => OffsetRequest.EarliestTime
       case OffsetRequest.LargestTimeString => OffsetRequest.LatestTime
+      case OffsetRequest.SmallestOnStartTimeString => OffsetRequest.EarliestTime
+      case OffsetRequest.LargestOnStartTimeString => OffsetRequest.LatestTime
       case _ => OffsetRequest.LatestTime
     }
     val newOffset = simpleConsumer.earliestOrLatestOffset(topicAndPartition, startTimestamp, Request.OrdinaryConsumerId)

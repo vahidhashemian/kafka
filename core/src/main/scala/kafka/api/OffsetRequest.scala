@@ -32,6 +32,8 @@ object OffsetRequest {
 
   val SmallestTimeString = "smallest"
   val LargestTimeString = "largest"
+  val SmallestOnStartTimeString = "smallestOnStart"
+  val LargestOnStartTimeString = "largestOnStart"
   val LatestTime = -1L
   val EarliestTime = -2L
 
