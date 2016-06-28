@@ -42,6 +42,7 @@ object ConsumerGroupCommand {
 
   def main(args: Array[String]) {
     val opts = new ConsumerGroupCommandOptions(args)
+    val consumerGroupOutputWriter = new ConsumerGroupOutputWriter
 
     if (args.length == 0)
       CommandLineUtils.printUsageAndDie(opts.parser, "List all consumer groups, describe a consumer group, or delete consumer group info.")
@@ -54,8 +55,8 @@ object ConsumerGroupCommand {
     opts.checkArgs()
 
     val consumerGroupService = {
-      if (opts.options.has(opts.newConsumerOpt)) new KafkaConsumerGroupService(opts)
-      else new ZkConsumerGroupService(opts)
+      if (opts.options.has(opts.newConsumerOpt)) new KafkaConsumerGroupService(opts, consumerGroupOutputWriter)
+      else new ZkConsumerGroupService(opts, consumerGroupOutputWriter)
     }
 
     try {
@@ -78,53 +79,98 @@ object ConsumerGroupCommand {
     }
   }
 
-  sealed trait ConsumerGroupService {
+  case class ConsumerGroupAssignment(group: String, topicOpt: Option[String], partitionOpt: Option[Int], offsetOpt: Option[Long],
+                                     lagOpt: Option[Long], memberIdOpt: Option[String], memberHostOpt: Option[String],
+                                     clientIdOpt: Option[String], logEndOffset: Option[Long])
+
+  trait OutputWriter {
+    def printError(msg: String)
+    def printAssignmentHeader()
+    protected def printAssignmentRow(assignmentRow: ConsumerGroupAssignment)
+    def printAssignmentRows(assignmentRows: Array[ConsumerGroupAssignment]): Unit = {
+      assignmentRows.foreach { row => printAssignmentRow(row) }
+    }
+  }
+
+  class ConsumerGroupOutputWriter extends OutputWriter {
+
+    def printError(msg: String): Unit = println("Error: " + msg)
+
+    def printAssignmentHeader(): Unit =
+      println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format("GROUP", "TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "MEMBER-HOST", "CLIENT-ID"))
+
+    def printAssignmentRow(assignmentRow: ConsumerGroupAssignment): Unit =
+     println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format(assignmentRow.group, assignmentRow.topicOpt.getOrElse(""),
+         assignmentRow.partitionOpt.getOrElse(""), assignmentRow.offsetOpt.getOrElse(""), assignmentRow.logEndOffset.getOrElse(""),
+         assignmentRow.lagOpt.getOrElse(""), assignmentRow.memberIdOpt.getOrElse("none"), assignmentRow.memberHostOpt.getOrElse(""),
+         assignmentRow.clientIdOpt.getOrElse("")))
+  }
+
+  trait ConsumerGroupService {
 
     def list(): Unit
 
     def describe() {
-      describeGroup(opts.options.valueOf(opts.groupOpt))
+      describeGroup(opts.options.valueOf(opts.groupOpt)) match {
+        case None =>
+          consumerGroupOutputWriter.printError(s"The consumer group '${opts.groupOpt}' does not exist")
+        case Some(results) =>
+          consumerGroupOutputWriter.printAssignmentHeader()
+          consumerGroupOutputWriter.printAssignmentRows(results)
+          //printDescribeHeader()
+          //printDescribeGroupResults(results)
+      }
     }
 
     def close(): Unit
+
+    protected def consumerGroupOutputWriter: OutputWriter
 
     protected def opts: ConsumerGroupCommandOptions
 
     protected def getLogEndOffset(topicAndPartition: TopicAndPartition): LogEndOffsetResult
 
-    protected def describeGroup(group: String): Unit
+    protected def describeGroup(group: String): Option[Array[ConsumerGroupAssignment]]
 
     protected def describeMemberTopicPartition(group: String,
                                                topicPartitions: Seq[TopicAndPartition],
                                                getPartitionOffset: TopicAndPartition => Option[Long],
-                                               memberId: Option[String],
-                                               memberHost: Option[String],
-                                               clientId: Option[String]): Unit = {
+                                               memberIdOpt: Option[String],
+                                               memberHostOpt: Option[String],
+                                               clientIdOpt: Option[String]): Array[ConsumerGroupAssignment] = {
       if (topicPartitions.isEmpty)
-        printDescribeResult(group, None, None, None, memberId, memberHost, clientId, None)
-      else
+        Array[ConsumerGroupAssignment](getDescribeResult(group, None, None, None, memberIdOpt, memberHostOpt, clientIdOpt, None))
+      else {
+        var assignmentRows: Array[ConsumerGroupAssignment] = Array()
         topicPartitions
           .sortBy { case topicPartition => topicPartition.partition }
           .foreach { topicPartition =>
-            describePartition(group, topicPartition.topic, topicPartition.partition, getPartitionOffset(topicPartition),
-              memberId, memberHost, clientId)
+            assignmentRows = assignmentRows :+ describePartition(group, topicPartition.topic, topicPartition.partition, getPartitionOffset(topicPartition),
+              memberIdOpt, memberHostOpt, clientIdOpt)
           }
+        assignmentRows
+      }
     }
 
     protected def printDescribeHeader() {
-      println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format("GROUP", "TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "MEMBER-HOST", "CLIENT-ID"))
+      consumerGroupOutputWriter.printAssignmentHeader();
     }
     
-    protected def printDescribeResult(group: String,
-                                      topic: Option[String],
-                                      partition: Option[Int],
-                                      offsetOpt: Option[Long],
-                                      memberIdOpt: Option[String],
-                                      memberHostOpt: Option[String],
-                                      clientIdOpt: Option[String],
-                                      logEndOffset: Option[Long]) {
-        val lag = offsetOpt.filter(_ != -1).flatMap(offset => logEndOffset.map(_ - offset))
-        println("%-30s %-30s %-10s %-15s %-15s %-10s %-50s %-30s %s".format(group, topic.getOrElse(""), partition.getOrElse(""), offsetOpt.getOrElse(""), logEndOffset.getOrElse(""), lag.getOrElse(""), memberIdOpt.getOrElse("none"), memberHostOpt.getOrElse(""), clientIdOpt.getOrElse("")))
+    protected def printDescribeGroupResults(assignmentRows: Array[ConsumerGroupAssignment]) = {
+      consumerGroupOutputWriter.printAssignmentRows(assignmentRows)
+    }
+    
+    protected def getDescribeResult(group: String,
+                                    topicOpt: Option[String],
+                                    partitionOpt: Option[Int],
+                                    offsetOpt: Option[Long],
+                                    memberIdOpt: Option[String],
+                                    memberHostOpt: Option[String],
+                                    clientIdOpt: Option[String],
+                                    logEndOffsetOpt: Option[Long]): ConsumerGroupAssignment = {
+        val lag = offsetOpt.filter(_ != -1).flatMap(offset => logEndOffsetOpt.map(_ - offset))
+        new ConsumerGroupAssignment(group, topicOpt, partitionOpt, offsetOpt, lag, memberIdOpt, memberHostOpt, clientIdOpt, logEndOffsetOpt)
+        //consumerGroupOutputWriter.printAssignment(group, topic, partition, offsetOpt, lag, memberIdOpt, memberHostOpt, clientIdOpt, logEndOffset)
     }
 
     private def describePartition(group: String,
@@ -133,20 +179,22 @@ object ConsumerGroupCommand {
                                   offsetOpt: Option[Long],
                                   memberIdOpt: Option[String],
                                   memberHostOpt: Option[String],
-                                  clientIdOpt: Option[String]) {
-      def print(logEndOffset: Option[Long]): Unit =
-        printDescribeResult(group, Option(topic), Option(partition), offsetOpt, memberIdOpt, memberHostOpt, clientIdOpt, logEndOffset)
+                                  clientIdOpt: Option[String]): ConsumerGroupAssignment = {
+      def getDescribePartitionResult(logEndOffsetOpt: Option[Long]): ConsumerGroupAssignment =
+        getDescribeResult(group, Option(topic), Option(partition), offsetOpt, memberIdOpt, memberHostOpt, clientIdOpt, logEndOffsetOpt)
       
       getLogEndOffset(new TopicAndPartition(topic, partition)) match {
-        case LogEndOffsetResult.LogEndOffset(logEndOffset) => print(Some(logEndOffset))
-        case LogEndOffsetResult.Unknown => print(None)
-        case LogEndOffsetResult.Ignore =>
+        case LogEndOffsetResult.LogEndOffset(logEndOffset) =>
+          val a = getDescribePartitionResult(Some(logEndOffset))
+          return a
+        case LogEndOffsetResult.Unknown => getDescribePartitionResult(None)
+        case LogEndOffsetResult.Ignore => null
       }
     }
 
   }
 
-  class ZkConsumerGroupService(val opts: ConsumerGroupCommandOptions) extends ConsumerGroupService {
+  class ZkConsumerGroupService(val opts: ConsumerGroupCommandOptions, val consumerGroupOutputWriter: OutputWriter) extends ConsumerGroupService {
 
     private val zkUtils = {
       val zkUrl = opts.options.valueOf(opts.zkConnectOpt)
@@ -170,18 +218,20 @@ object ConsumerGroupCommand {
         deleteAllForTopic()
     }
 
-    protected def describeGroup(group: String) {
+    protected def describeGroup(group: String): Option[Array[ConsumerGroupAssignment]] = {
       val props = if (opts.options.has(opts.commandConfigOpt)) Utils.loadProps(opts.options.valueOf(opts.commandConfigOpt)) else new Properties()
       val channelSocketTimeoutMs = props.getProperty("channelSocketTimeoutMs", "600").toInt
       val channelRetryBackoffMs = props.getProperty("channelRetryBackoffMsOpt", "300").toInt
-      if (!zkUtils.getConsumerGroups().contains(group)) {
-        println(s"The consumer group '$group' does not exist")
-        return
-      }
+      if (!zkUtils.getConsumerGroups().contains(group))
+        return None
+
       val topics = zkUtils.getTopicsByConsumerGroup(group)
-      if (topics.isEmpty)
-        println(s"No topic available for consumer group '$group'")
-      printDescribeHeader()
+      //if (topics.isEmpty) {
+      //  consumerGroupOutputWriter.printError(s"No topic available for consumer group '$group'")
+      //  return None
+      //}
+
+      var assignmentRows: Array[ConsumerGroupAssignment] = Array()
 
       val topicPartitions = getTopicsPartitions(topics)
       var groupMemberIds = zkUtils.getConsumersInGroup(group)
@@ -220,7 +270,7 @@ object ConsumerGroupCommand {
         val partitionOffsets = getPartitionOffsets(group, List(topicPartition), channelSocketTimeoutMs, channelRetryBackoffMs)
         val memberId = memberIdByTopicPartition.get(topicPartition)
         // since member id is repeated in client id, leave member host and client id empty
-        describeMemberTopicPartition(group, List(topicPartition), partitionOffsets.get, memberId, None, None)
+        assignmentRows = assignmentRows ++ describeMemberTopicPartition(group, List(topicPartition), partitionOffsets.get, memberId, None, None)
         if (!memberId.isEmpty) {
           groupMemberIds = groupMemberIds.filterNot { _ == memberId.get }
         }
@@ -230,9 +280,11 @@ object ConsumerGroupCommand {
         topicsByMemberId(memberId).foreach { topic =>
           // since members with no topic partitions are processed here, we pass empty for topic partitions and offsets
           // since member id is repeated in client id, leave member host and client id empty
-          describeMemberTopicPartition(group, Array[TopicAndPartition](), Map[TopicAndPartition, Option[Long]](), Some(memberId), None, None)
+          assignmentRows = assignmentRows ++ describeMemberTopicPartition(group, Array[TopicAndPartition](), Map[TopicAndPartition, Option[Long]](), Some(memberId), None, None)
         }
       }
+
+      Some(assignmentRows)
     }
 
     private def getTopicsPartitions(topics: Seq[String]): Seq[TopicAndPartition] = {
@@ -350,7 +402,7 @@ object ConsumerGroupCommand {
 
   }
 
-  class KafkaConsumerGroupService(val opts: ConsumerGroupCommandOptions) extends ConsumerGroupService {
+  class KafkaConsumerGroupService(val opts: ConsumerGroupCommandOptions, val consumerGroupOutputWriter: OutputWriter) extends ConsumerGroupService {
 
     private val adminClient = createAdminClient()
 
@@ -361,15 +413,19 @@ object ConsumerGroupCommand {
       adminClient.listAllConsumerGroupsFlattened().foreach(x => println(x.groupId))
     }
 
-    protected def describeGroup(group: String) {
+    protected def describeGroup(group: String): Option[Array[ConsumerGroupAssignment]] = {
       adminClient.describeConsumerGroup(group) match {
-        case None => println(s"Consumer group `${group}` does not exist.")
+        case None =>
+          consumerGroupOutputWriter.printError(s"Consumer group `$group` does not exist.")
+          None
         case Some(consumerSummaries) =>
-          if (consumerSummaries.isEmpty)
-            println(s"Consumer group `${group}` is rebalancing.")
+          if (consumerSummaries.isEmpty) {
+            consumerGroupOutputWriter.printError(s"Consumer group `$group` is rebalancing.")
+            None
+          }
           else {
             val consumer = getConsumer()
-            printDescribeHeader()
+            var assignmentRows = Array[ConsumerGroupAssignment]()
             consumerSummaries.foreach { consumerSummary =>
               val topicPartitions = consumerSummary.assignment.map(tp => TopicAndPartition(tp.topic, tp.partition))
               val partitionOffsets = topicPartitions.flatMap { topicPartition =>
@@ -377,9 +433,10 @@ object ConsumerGroupCommand {
                   topicPartition -> offsetAndMetadata.offset
                 }
               }.toMap
-              describeMemberTopicPartition(group, topicPartitions, partitionOffsets.get,
+              assignmentRows = assignmentRows ++ describeMemberTopicPartition(group, topicPartitions, partitionOffsets.get,
                 Some(s"${consumerSummary.memberId}"), Some(s"${consumerSummary.clientHost}"), Some(s"${consumerSummary.clientId}"))
             }
+            Some(assignmentRows)
           }
       }
     }
