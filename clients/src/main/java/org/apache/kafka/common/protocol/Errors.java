@@ -17,6 +17,7 @@
 package org.apache.kafka.common.protocol;
 
 import org.apache.kafka.common.errors.ApiException;
+import org.apache.kafka.common.errors.AuthenticationFailedException;
 import org.apache.kafka.common.errors.BrokerNotAvailableException;
 import org.apache.kafka.common.errors.ClusterAuthorizationException;
 import org.apache.kafka.common.errors.ConcurrentTransactionsException;
@@ -508,7 +509,14 @@ public enum Errors {
             public ApiException build(String message) {
                 return new KafkaStorageException(message);
             }
-    });
+    }),
+    AUTHENTICATION_FAILED(57, "Authentication failed.",
+        new ApiExceptionBuilder() {
+            @Override
+            public ApiException build(String message) {
+                return new AuthenticationFailedException(message);
+            }
+        }),;
 
     private interface ApiExceptionBuilder {
         ApiException build(String message);

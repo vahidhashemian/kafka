@@ -68,7 +68,8 @@ public enum ApiKeys {
     CREATE_ACLS(30, "CreateAcls"),
     DELETE_ACLS(31, "DeleteAcls"),
     DESCRIBE_CONFIGS(32, "DescribeConfigs"),
-    ALTER_CONFIGS(33, "AlterConfigs");
+    ALTER_CONFIGS(33, "AlterConfigs"),
+    SASL_AUTHENTICATE(34, "SaslAuthenticate");
 
     private static final ApiKeys[] ID_TO_TYPE;
     private static final int MIN_API_KEY = 0;

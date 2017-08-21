@@ -823,7 +823,7 @@ public class SaslAuthenticatorTest {
 
     private void createAndCheckClientConnectionFailure(SecurityProtocol securityProtocol, String node) throws Exception {
         createClientConnection(securityProtocol, node);
-        NetworkTestUtils.waitForChannelClose(selector, node, ChannelState.AUTHENTICATE);
+        NetworkTestUtils.waitForChannelClose(selector, node, ChannelState.AUTHENTICATION_FAILED);
         selector.close();
         selector = null;
     }
@@ -838,7 +838,7 @@ public class SaslAuthenticatorTest {
     }
 
     private SaslHandshakeResponse sendHandshakeRequestReceiveResponse(String node) throws Exception {
-        SaslHandshakeRequest handshakeRequest = new SaslHandshakeRequest("PLAIN");
+        SaslHandshakeRequest handshakeRequest = new SaslHandshakeRequest.Builder("PLAIN").build((short) 0);
         SaslHandshakeResponse response = (SaslHandshakeResponse) sendKafkaRequestReceiveResponse(node, ApiKeys.SASL_HANDSHAKE, handshakeRequest);
         assertEquals(Errors.NONE, response.error());
         return response;

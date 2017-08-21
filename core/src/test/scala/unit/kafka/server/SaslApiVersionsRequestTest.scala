@@ -67,8 +67,8 @@ class SaslApiVersionsRequestTest extends BaseRequestTest with SaslSetup {
     try {
       sendSaslHandshakeRequestValidateResponse(plaintextSocket)
       try {
-        sendApiVersionsRequest(plaintextSocket, new ApiVersionsRequest.Builder().build(0))
-        fail("Versions Request during Sasl handshake did not fail")
+        val response = sendApiVersionsRequest(plaintextSocket, new ApiVersionsRequest.Builder().build(0))
+        assertEquals(Errors.ILLEGAL_SASL_STATE, response.error)
       } catch {
         case _: IOException => // expected exception
       }

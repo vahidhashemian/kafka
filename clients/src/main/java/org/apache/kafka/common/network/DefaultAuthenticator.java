@@ -22,6 +22,7 @@ import java.util.Map;
 
 import org.apache.kafka.common.security.auth.PrincipalBuilder;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.protocol.Errors;
 
 public class DefaultAuthenticator implements Authenticator {
 
@@ -38,6 +39,11 @@ public class DefaultAuthenticator implements Authenticator {
      * No-Op for default authenticator
      */
     public void authenticate() throws IOException {}
+
+    @Override
+    public Errors error() {
+        return Errors.NONE;
+    }
 
     /**
      * Constructs Principal using configured principalBuilder.

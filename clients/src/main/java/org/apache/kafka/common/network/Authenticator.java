@@ -23,6 +23,7 @@ import java.security.Principal;
 
 import org.apache.kafka.common.security.auth.PrincipalBuilder;
 import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.protocol.Errors;
 
 /**
  * Authentication for Channel
@@ -43,6 +44,12 @@ public interface Authenticator extends Closeable {
      * If no further authentication needs to be done returns.
      */
     void authenticate() throws IOException;
+
+    /**
+     * Returns the first error encountered during authentication
+     * @return authentication error if authentication failed, Errors.NONE otherwise
+     */
+    Errors error();
 
     /**
      * Returns Principal using PrincipalBuilder

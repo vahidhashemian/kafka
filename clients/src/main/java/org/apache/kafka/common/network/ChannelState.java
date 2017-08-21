@@ -43,7 +43,7 @@ package org.apache.kafka.common.network;
  *   <li>PLAINTEXT Good path: NOT_CONNECTED => READY => LOCAL_CLOSE</li>
  *   <li>SASL/SSL Good path: NOT_CONNECTED => AUTHENTICATE => READY => LOCAL_CLOSE</li>
  *   <li>Bootstrap server misconfiguration: NOT_CONNECTED, disconnected in NOT_CONNECTED state</li>
- *   <li>Security misconfiguration: NOT_CONNECTED => AUTHENTICATE, disconnected in AUTHENTICATE state</li>
+ *   <li>Security misconfiguration: NOT_CONNECTED => AUTHENTICATE => AUTHENTICATION_FAILED, disconnected in AUTHENTICATION_FAILED state</li>
  * </ul>
  */
 public enum ChannelState {
@@ -52,5 +52,7 @@ public enum ChannelState {
     READY,
     EXPIRED,
     FAILED_SEND,
+    UNSUPPORTED_AUTHENTICATION_MECHANISM,
+    AUTHENTICATION_FAILED,
     LOCAL_CLOSE
 }

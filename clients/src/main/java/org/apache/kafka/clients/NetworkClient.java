@@ -589,7 +589,14 @@ public class NetworkClient implements KafkaClient {
         apiVersions.remove(nodeId);
         nodesNeedingApiVersionsFetch.remove(nodeId);
         switch (disconnectState) {
+            case UNSUPPORTED_AUTHENTICATION_MECHANISM:
+                log.error("Connection to node {} failed authentication since the mechanism requested is not enabled in the broker.", nodeId);
+                break;
+            case AUTHENTICATION_FAILED:
+                log.error("Connection to node {} failed authentication due to invalid credentials.", nodeId);
+                break;
             case AUTHENTICATE:
+                // This warning applies to older brokers which dont provide feedback on authentication failures
                 log.warn("Connection to node {} terminated during authentication. This may indicate " +
                         "that authentication failed due to invalid credentials.", nodeId);
                 break;

@@ -33,9 +33,12 @@ import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.protocol.Protocol;
 import org.apache.kafka.common.protocol.types.SchemaException;
 import org.apache.kafka.common.protocol.types.Struct;
+import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
 import org.apache.kafka.common.requests.RequestHeader;
+import org.apache.kafka.common.requests.SaslAuthenticateRequest;
+import org.apache.kafka.common.requests.SaslAuthenticateResponse;
 import org.apache.kafka.common.requests.SaslHandshakeRequest;
 import org.apache.kafka.common.requests.SaslHandshakeResponse;
 import org.apache.kafka.common.security.JaasContext;
@@ -47,6 +50,7 @@ import org.apache.kafka.common.security.kerberos.KerberosShortNamer;
 import org.apache.kafka.common.security.scram.ScramCredential;
 import org.apache.kafka.common.security.scram.ScramMechanism;
 import org.apache.kafka.common.security.scram.ScramServerCallbackHandler;
+import org.apache.kafka.common.utils.Utils;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -78,7 +82,12 @@ public class SaslServerAuthenticator implements Authenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
 
     public enum SaslState {
-        GSSAPI_OR_HANDSHAKE_REQUEST, HANDSHAKE_REQUEST, AUTHENTICATE, COMPLETE, FAILED
+        INITIAL_REQUEST, // May be GSSAPI token, SaslHandshake or ApiVersions
+        HANDSHAKE_OR_VERSIONS_REQUEST,
+        HANDSHAKE_REQUEST,
+        AUTHENTICATE,
+        COMPLETE,
+        FAILED
     }
 
     private final String node;
@@ -89,7 +98,7 @@ public class SaslServerAuthenticator implements Authenticator {
     private final CredentialCache credentialCache;
 
     // Current SASL state
-    private SaslState saslState = SaslState.GSSAPI_OR_HANDSHAKE_REQUEST;
+    private SaslState saslState = SaslState.INITIAL_REQUEST;
     // Next SASL state to be set when outgoing writes associated with the current SASL state complete
     private SaslState pendingSaslState = null;
     private SaslServer saslServer;
@@ -104,6 +113,10 @@ public class SaslServerAuthenticator implements Authenticator {
     // buffers used in `authenticate`
     private NetworkReceive netInBuffer;
     private Send netOutBuffer;
+    // flag indicating if sasl tokens are send as Kafka SaslAuthenticate request/responses
+    private boolean useKafkaSaslAuthenticateHeaders;
+    // authentication error if authentication failed
+    private Errors error;
 
     public SaslServerAuthenticator(String node, JaasContext jaasContext, final Subject subject,
                                    KerberosShortNamer kerberosNameParser, String host,
@@ -116,6 +129,8 @@ public class SaslServerAuthenticator implements Authenticator {
         this.kerberosNamer = kerberosNameParser;
         this.host = host;
         this.credentialCache = credentialCache;
+        this.useKafkaSaslAuthenticateHeaders = false;
+        this.error = Errors.NONE;
     }
 
     public void configure(TransportLayer transportLayer, PrincipalBuilder principalBuilder, Map<String, ?> configs) {
@@ -222,20 +237,17 @@ public class SaslServerAuthenticator implements Authenticator {
             netInBuffer = null; // reset the networkReceive as we read all the data.
             try {
                 switch (saslState) {
+                    case HANDSHAKE_OR_VERSIONS_REQUEST:
                     case HANDSHAKE_REQUEST:
                         handleKafkaRequest(clientToken);
                         break;
-                    case GSSAPI_OR_HANDSHAKE_REQUEST:
+                    case INITIAL_REQUEST:
                         if (handleKafkaRequest(clientToken))
                             break;
                         // For default GSSAPI, fall through to authenticate using the client token as the first GSSAPI packet.
                         // This is required for interoperability with 0.9.0.x clients which do not send handshake request
                     case AUTHENTICATE:
-                        byte[] response = saslServer.evaluateResponse(clientToken);
-                        if (response != null) {
-                            netOutBuffer = new NetworkSend(node, ByteBuffer.wrap(response));
-                            flushNetOutBufferAndUpdateInterestOps();
-                        }
+                        handleSaslToken(clientToken);
                         // When the authentication exchange is complete and no more tokens are expected from the client,
                         // update SASL state. Current SASL state will be updated when outgoing writes to the client complete.
                         if (saslServer.isComplete())
@@ -249,6 +261,11 @@ public class SaslServerAuthenticator implements Authenticator {
                 throw new IOException(e);
             }
         }
+    }
+
+    @Override
+    public Errors error() {
+        return error;
     }
 
     public Principal principal() {
@@ -293,6 +310,46 @@ public class SaslServerAuthenticator implements Authenticator {
         return netOutBuffer.completed();
     }
 
+    private void handleSaslToken(byte[] clientToken) throws SaslException, IOException {
+        if (!useKafkaSaslAuthenticateHeaders) {
+            byte[] response = saslServer.evaluateResponse(clientToken);
+            if (response != null) {
+                netOutBuffer = new NetworkSend(node, ByteBuffer.wrap(response));
+                flushNetOutBufferAndUpdateInterestOps();
+            }
+        } else {
+            ByteBuffer requestBuffer = ByteBuffer.wrap(clientToken);
+            RequestHeader requestHeader = RequestHeader.parse(requestBuffer);
+            ApiKeys apiKey = ApiKeys.forId(requestHeader.apiKey());
+            short version = requestHeader.apiVersion();
+            AbstractRequest request = AbstractRequest.getRequest(apiKey.id, version, requestBuffer).request;
+            if (apiKey != ApiKeys.SASL_AUTHENTICATE) {
+                this.error = Errors.ILLEGAL_SASL_STATE;
+                IllegalSaslStateException e = new IllegalSaslStateException("Unexpected Kafka request of type " + apiKey + " during SASL authentication.");
+                sendKafkaResponse(requestHeader, request.getErrorResponse(e));
+                throw e;
+            }
+            if (!Protocol.apiVersionSupported(requestHeader.apiKey(), version)) {
+                this.error = Errors.UNSUPPORTED_VERSION;
+                UnsupportedVersionException e = new UnsupportedVersionException("Version " + version + " is not supported for apiKey " + apiKey);
+                sendKafkaResponse(requestHeader, request.getErrorResponse(e));
+                throw e;
+            }
+            SaslAuthenticateRequest saslAuthenticateRequest = (SaslAuthenticateRequest) request;
+
+            byte[] responseToken;
+            try {
+                responseToken = saslServer.evaluateResponse(Utils.readBytes(saslAuthenticateRequest.saslAuthBytes()));
+            } catch (SaslException e) {
+                this.error = Errors.AUTHENTICATION_FAILED;
+                sendKafkaResponse(requestHeader, new SaslAuthenticateResponse(this.error));
+                throw e;
+            }
+            if (responseToken != null)
+                sendKafkaResponse(requestHeader, new SaslAuthenticateResponse(Errors.NONE, ByteBuffer.wrap(responseToken)));
+        }
+    }
+
     private boolean handleKafkaRequest(byte[] requestBytes) throws IOException, AuthenticationException {
         boolean isKafkaRequest = false;
         String clientMechanism = null;
@@ -302,7 +359,8 @@ public class SaslServerAuthenticator implements Authenticator {
             ApiKeys apiKey = ApiKeys.forId(requestHeader.apiKey());
             // A valid Kafka request header was received. SASL authentication tokens are now expected only
             // following a SaslHandshakeRequest since this is not a GSSAPI client token from a Kafka 0.9.0.x client.
-            setSaslState(SaslState.HANDSHAKE_REQUEST);
+            if (saslState == SaslState.INITIAL_REQUEST)
+                setSaslState(SaslState.HANDSHAKE_OR_VERSIONS_REQUEST);
             isKafkaRequest = true;
 
             if (!Protocol.apiVersionSupported(requestHeader.apiKey(), requestHeader.apiVersion())) {
@@ -314,10 +372,15 @@ public class SaslServerAuthenticator implements Authenticator {
                 LOG.debug("Handle Kafka request {}", apiKey);
                 switch (apiKey) {
                     case API_VERSIONS:
+                        if (saslState != SaslState.HANDSHAKE_OR_VERSIONS_REQUEST)
+                            throw new IllegalStateException("Unexpected ApiVersions request received during SASL authentication state " + saslState);
                         handleApiVersionsRequest(requestHeader);
+                        setSaslState(SaslState.HANDSHAKE_REQUEST);
                         break;
                     case SASL_HANDSHAKE:
                         short version = requestHeader.apiVersion();
+                        if (version >= 1)
+                            this.useKafkaSaslAuthenticateHeaders = true;
                         Struct struct = ApiKeys.SASL_HANDSHAKE.parseRequest(version, requestBuffer);
                         SaslHandshakeRequest saslHandshakeRequest = new SaslHandshakeRequest(struct, version);
                         clientMechanism = handleHandshakeRequest(requestHeader, saslHandshakeRequest);
@@ -327,7 +390,7 @@ public class SaslServerAuthenticator implements Authenticator {
                 }
             }
         } catch (SchemaException | IllegalArgumentException e) {
-            if (saslState == SaslState.GSSAPI_OR_HANDSHAKE_REQUEST) {
+            if (saslState == SaslState.INITIAL_REQUEST) {
                 // SchemaException is thrown if the request is not in Kafka format. IllegalArgumentException is thrown
                 // if the API key is invalid. For compatibility with 0.9.0.x where the first packet is a GSSAPI token
                 // starting with 0x60, revert to GSSAPI for both these exceptions.
@@ -363,7 +426,8 @@ public class SaslServerAuthenticator implements Authenticator {
             return clientMechanism;
         } else {
             LOG.debug("SASL mechanism '{}' requested by client is not supported", clientMechanism);
-            sendKafkaResponse(requestHeader, new SaslHandshakeResponse(Errors.UNSUPPORTED_SASL_MECHANISM, enabledMechanisms));
+            this.error = Errors.UNSUPPORTED_SASL_MECHANISM;
+            sendKafkaResponse(requestHeader, new SaslHandshakeResponse(this.error, enabledMechanisms));
             throw new UnsupportedSaslMechanismException("Unsupported SASL mechanism " + clientMechanism);
         }
     }

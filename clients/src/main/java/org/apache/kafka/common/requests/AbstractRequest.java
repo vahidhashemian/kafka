@@ -214,6 +214,9 @@ public abstract class AbstractRequest extends AbstractRequestResponse {
             case ALTER_CONFIGS:
                 request = new AlterConfigsRequest(struct, version);
                 break;
+            case SASL_AUTHENTICATE:
+                request = new SaslAuthenticateRequest(struct, version);
+                break;
             default:
                 throw new AssertionError(String.format("ApiKey %s is not currently handled in `getRequest`, the " +
                         "code should be updated to do so.", apiKey));
