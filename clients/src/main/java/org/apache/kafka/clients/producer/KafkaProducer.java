@@ -230,6 +230,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     public static final String NETWORK_THREAD_PREFIX = "kafka-producer-network-thread";
 
     private String clientId;
+    private NetworkClient client;
     // Visible for testing
     final Metrics metrics;
     private final Partitioner partitioner;
@@ -373,7 +374,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             this.metadata.update(Cluster.bootstrap(addresses), Collections.<String>emptySet(), time.milliseconds());
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config);
             Sensor throttleTimeSensor = Sender.throttleTimeSensor(metrics);
-            NetworkClient client = new NetworkClient(
+            this.client = new NetworkClient(
                     new Selector(config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
                             this.metrics, time, "producer", channelBuilder),
                     this.metadata,
@@ -821,12 +822,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             metadata.add(topic);
             int version = metadata.requestUpdate();
             sender.wakeup();
+
             try {
-                metadata.awaitUpdate(version, remainingWaitMs);
+                metadata.awaitUpdate(version, remainingWaitMs, client);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
             }
+
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - begin;
             if (elapsed >= maxWaitMs)

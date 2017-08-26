@@ -160,6 +160,10 @@ public class Sender implements Runnable {
         while (running) {
             try {
                 run(time.milliseconds());
+                for (Node node: metadata.fetch().nodes()) {
+                    if (client.authenticationFailed(node))
+                        this.initiateClose();
+                }
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
             }

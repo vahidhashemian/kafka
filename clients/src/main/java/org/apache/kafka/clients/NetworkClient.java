@@ -308,6 +308,18 @@ public class NetworkClient implements KafkaClient {
     }
 
     /**
+     * Check if authentication to this node has failed, based on the connection state. Authentication failures are
+     * permanent and should not be resumed in the next {@link #ready(org.apache.kafka.common.Node, long)} } call.
+     *
+     * @param node the node to check
+     * @return true iff authentication has failed
+     */
+    @Override
+    public boolean authenticationFailed(Node node) {
+        return connectionStates.isAuthenticationFailed(node.idString());
+    }
+
+    /**
      * Check if the node with the given id is ready to send more requests.
      *
      * @param node The node
@@ -590,17 +602,21 @@ public class NetworkClient implements KafkaClient {
         nodesNeedingApiVersionsFetch.remove(nodeId);
         switch (disconnectState) {
             case UNSUPPORTED_AUTHENTICATION_MECHANISM:
+                connectionStates.authenticationFailed(nodeId, now);
                 log.error("Connection to node {} failed authentication since the mechanism requested is not enabled in the broker.", nodeId);
                 break;
             case AUTHENTICATION_FAILED:
+                connectionStates.authenticationFailed(nodeId, now);
                 log.error("Connection to node {} failed authentication due to invalid credentials.", nodeId);
                 break;
             case AUTHENTICATE:
+                connectionStates.authenticationFailed(nodeId, now);
                 // This warning applies to older brokers which dont provide feedback on authentication failures
                 log.warn("Connection to node {} terminated during authentication. This may indicate " +
                         "that authentication failed due to invalid credentials.", nodeId);
                 break;
             case NOT_CONNECTED:
+                connectionStates.disconnected(nodeId, now);
                 log.warn("Connection to node {} could not be established. Broker may not be available.", nodeId);
                 break;
             default:

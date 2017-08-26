@@ -128,6 +128,12 @@ public class MockClient implements KafkaClient {
     }
 
     @Override
+    public boolean authenticationFailed(Node node) {
+        //TODO
+        return false;
+    }
+
+    @Override
     public void disconnect(String node) {
         long now = time.milliseconds();
         Iterator<ClientRequest> iter = requests.iterator();
