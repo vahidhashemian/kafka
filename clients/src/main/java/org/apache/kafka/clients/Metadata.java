@@ -160,6 +160,10 @@ public final class Metadata {
         }
     }
 
+    public synchronized AuthenticationException getAuthenticationException() {
+        return authenticationException;
+    }
+
     /**
      * Wait for metadata update until the current version is larger than the last version we know of
      */

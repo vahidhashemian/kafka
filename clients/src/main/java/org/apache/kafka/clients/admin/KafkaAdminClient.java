@@ -41,6 +41,7 @@ import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.errors.ApiException;
+import org.apache.kafka.common.errors.AuthenticationException;
 import org.apache.kafka.common.errors.BrokerNotAvailableException;
 import org.apache.kafka.common.errors.DisconnectException;
 import org.apache.kafka.common.errors.InvalidRequestException;
@@ -939,13 +940,17 @@ public class KafkaAdminClient extends AdminClient {
              */
             Integer prevMetadataVersion = null;
 
+            AuthenticationException exception = null;
+
             long now = time.milliseconds();
             log.trace("Thread starting");
             while (true) {
                 // Check if the AdminClient thread should shut down.
                 long curHardShutdownTimeMs = hardShutdownTimeMs.get();
-                if ((curHardShutdownTimeMs != INVALID_SHUTDOWN_TIME) &&
-                        threadShouldExit(now, curHardShutdownTimeMs, callsToSend, correlationIdToCalls))
+
+                exception = metadata.getAuthenticationException();
+                if (exception != null || (curHardShutdownTimeMs != INVALID_SHUTDOWN_TIME &&
+                                          threadShouldExit(now, curHardShutdownTimeMs, callsToSend, correlationIdToCalls)))
                     break;
 
                 // Handle timeouts.
@@ -972,22 +977,29 @@ public class KafkaAdminClient extends AdminClient {
                 List<ClientResponse> responses = client.poll(pollTimeout, now);
                 log.trace("KafkaClient#poll retrieved {} response(s)", responses.size());
 
+                //metadata.maybeHandleNonRetriableAuthenticationExceptions();
+
                 // Update the current time and handle the latest responses.
                 now = time.milliseconds();
                 handleResponses(now, responses, callsInFlight, correlationIdToCalls);
             }
-            int numTimedOut = 0;
-            TimeoutProcessor timeoutProcessor = new TimeoutProcessor(Long.MAX_VALUE);
-            synchronized (this) {
-                numTimedOut += timeoutProcessor.handleTimeouts(newCalls,
+
+            if (exception == null) {
+                int numTimedOut = 0;
+                TimeoutProcessor timeoutProcessor = new TimeoutProcessor(Long.MAX_VALUE);
+                synchronized (this) {
+                    numTimedOut += timeoutProcessor.handleTimeouts(newCalls,
+                            "The AdminClient thread has exited.");
+                    newCalls = null;
+                }
+                numTimedOut += timeoutProcessor.handleTimeouts(correlationIdToCalls.values(),
                         "The AdminClient thread has exited.");
-                newCalls = null;
-            }
-            numTimedOut += timeoutProcessor.handleTimeouts(correlationIdToCalls.values(),
-                    "The AdminClient thread has exited.");
-            if (numTimedOut > 0) {
-                log.debug("Timed out {} remaining operations.", numTimedOut);
-            }
+                if (numTimedOut > 0) {
+                    log.debug("Timed out {} remaining operations.", numTimedOut);
+                }
+            } else
+                newCalls.get(0).fail(now, exception);
+
             closeQuietly(client, "KafkaClient");
             closeQuietly(metrics, "Metrics");
             log.debug("Exiting AdminClientRunnable thread.");

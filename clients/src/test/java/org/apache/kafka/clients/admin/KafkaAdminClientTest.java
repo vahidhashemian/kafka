@@ -29,9 +29,17 @@ import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.config.SaslConfigs;
+import org.apache.kafka.common.config.internals.BrokerSecurityConfigs;
+import org.apache.kafka.common.errors.AuthenticationException;
+import org.apache.kafka.common.errors.AuthenticationFailedException;
 import org.apache.kafka.common.errors.SecurityDisabledException;
 import org.apache.kafka.common.errors.TimeoutException;
+import org.apache.kafka.common.network.ListenerName;
+import org.apache.kafka.common.network.NetworkTestUtils;
+import org.apache.kafka.common.network.NioEchoServer;
 import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.protocol.SecurityProtocol;
 import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.common.requests.CreateAclsResponse;
 import org.apache.kafka.common.requests.CreateAclsResponse.AclCreationResponse;
@@ -44,9 +52,13 @@ import org.apache.kafka.common.requests.DescribeConfigsResponse;
 import org.apache.kafka.common.resource.Resource;
 import org.apache.kafka.common.resource.ResourceFilter;
 import org.apache.kafka.common.resource.ResourceType;
+import org.apache.kafka.common.security.TestSecurityConfig;
+import org.apache.kafka.common.security.authenticator.CredentialCache;
+import org.apache.kafka.common.security.authenticator.TestJaasConfig;
 import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestUtils;
+import org.hamcrest.core.IsInstanceOf;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
@@ -54,6 +66,7 @@ import org.junit.rules.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -395,7 +408,7 @@ public class KafkaAdminClientTest {
         private int numTries = 0;
 
         private int failuresInjected = 0;
-        
+
         @Override
         public KafkaAdminClient.TimeoutProcessor create(long now) {
             return new FailureInjectingTimeoutProcessor(now);
@@ -433,4 +446,43 @@ public class KafkaAdminClientTest {
 
     }
 
+    @Test
+    public void testAuthenticationFailure() throws Exception {
+        SecurityProtocol securityProtocol = SecurityProtocol.SASL_PLAINTEXT;
+
+        Map<String, Object> saslServerConfigs = new HashMap<>();
+        saslServerConfigs.put(BrokerSecurityConfigs.SASL_ENABLED_MECHANISMS_CONFIG, Arrays.asList("PLAIN"));
+
+        Map<String, Object> saslClientConfigs = new HashMap<>();
+        saslClientConfigs.put(AdminClientConfig.SECURITY_PROTOCOL_CONFIG, "SASL_PLAINTEXT");
+        saslClientConfigs.put(SaslConfigs.SASL_MECHANISM, "PLAIN");
+
+        TestJaasConfig testJaasConfig = TestJaasConfig.createConfiguration("PLAIN", Arrays.asList("PLAIN"));
+        testJaasConfig.setClientOptions("PLAIN", "myuser", "anotherpassword");
+        NioEchoServer server = createEchoServer(securityProtocol, saslServerConfigs);
+
+        saslClientConfigs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:" + server.port());
+
+        KafkaAdminClient adminClient = (KafkaAdminClient) KafkaAdminClient.create(saslClientConfigs);
+        try {
+            adminClient.listTopics().names().get();
+            fail("Expected an authentication error!");
+        } catch (ExecutionException e) {
+            assertTrue("Expected an authentication error!", e.getCause() instanceof AuthenticationFailedException);
+        } catch (Exception e) {
+            fail("Expected only an authentication error!");
+        } finally {
+            adminClient.close();
+            server.close();
+        }
+    }
+
+    private NioEchoServer createEchoServer(SecurityProtocol securityProtocol, Map<String, Object> saslServerConfigs) throws Exception {
+        return createEchoServer(ListenerName.forSecurityProtocol(securityProtocol), securityProtocol, saslServerConfigs);
+    }
+
+    private NioEchoServer createEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol, Map<String, Object> saslServerConfigs) throws Exception {
+        return NetworkTestUtils.createEchoServer(listenerName, securityProtocol,
+                new TestSecurityConfig(saslServerConfigs), new CredentialCache());
+    }
 }
