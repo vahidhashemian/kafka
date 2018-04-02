@@ -59,6 +59,15 @@ public class ManualMetadataUpdater implements MetadataUpdater {
     }
 
     @Override
+    public Node getNodeById(String nodeId) {
+        for (Node node: nodes) {
+            if (node.idString().equals(nodeId))
+                return node;
+        }
+        return null;
+    }
+
+    @Override
     public boolean isUpdateDue(long now) {
         return false;
     }

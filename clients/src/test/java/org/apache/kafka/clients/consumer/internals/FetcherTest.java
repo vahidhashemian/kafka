@@ -1335,7 +1335,7 @@ public class FetcherTest {
         for (int i = 1; i <= 3; i++) {
             int throttleTimeMs = 100 * i;
             FetchRequest.Builder builder = FetchRequest.Builder.forConsumer(100, 100, new LinkedHashMap<TopicPartition, PartitionData>());
-            ClientRequest request = client.newClientRequest(node.idString(), builder, time.milliseconds(), true, null);
+            ClientRequest request = client.newClientRequest(node, builder, time.milliseconds(), true, null);
             client.send(request, time.milliseconds());
             client.poll(1, time.milliseconds());
             FetchResponse response = fullFetchResponse(tp0, nextRecords, Errors.NONE, i, throttleTimeMs);

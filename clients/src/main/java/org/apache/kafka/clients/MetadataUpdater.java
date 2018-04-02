@@ -37,6 +37,11 @@ interface MetadataUpdater {
     List<Node> fetchNodes();
 
     /**
+     * Gets the cluster node by id.
+     */
+    Node getNodeById(String id);
+
+    /**
      * Returns true if an update to the cluster metadata info is due.
      */
     boolean isUpdateDue(long now);

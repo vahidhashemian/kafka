@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.clients;
 
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.RequestHeader;
@@ -28,7 +29,7 @@ public class ClientResponse {
 
     private final RequestHeader requestHeader;
     private final RequestCompletionHandler callback;
-    private final String destination;
+    private final Node destination;
     private final long receivedTimeMs;
     private final long latencyMs;
     private final boolean disconnected;
@@ -48,7 +49,7 @@ public class ClientResponse {
      */
     public ClientResponse(RequestHeader requestHeader,
                           RequestCompletionHandler callback,
-                          String destination,
+                          Node destination,
                           long createdTimeMs,
                           long receivedTimeMs,
                           boolean disconnected,
@@ -80,7 +81,7 @@ public class ClientResponse {
         return requestHeader;
     }
 
-    public String destination() {
+    public Node destination() {
         return destination;
     }
 

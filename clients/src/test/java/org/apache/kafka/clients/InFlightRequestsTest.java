@@ -17,6 +17,7 @@
 
 package org.apache.kafka.clients;
 
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.test.TestUtils;
@@ -31,7 +32,7 @@ public class InFlightRequestsTest {
 
     private InFlightRequests inFlightRequests;
     private int correlationId;
-    private String dest = "dest";
+    private Node destination = new Node(0, "host", 0);
 
     @Before
     public void setup() {
@@ -41,23 +42,23 @@ public class InFlightRequestsTest {
 
     @Test
     public void testCompleteLastSent() {
-        int correlationId1 = addRequest(dest);
-        int correlationId2 = addRequest(dest);
+        int correlationId1 = addRequest(destination);
+        int correlationId2 = addRequest(destination);
         assertEquals(2, inFlightRequests.count());
 
-        assertEquals(correlationId2, inFlightRequests.completeLastSent(dest).header.correlationId());
+        assertEquals(correlationId2, inFlightRequests.completeLastSent(destination.idString()).header.correlationId());
         assertEquals(1, inFlightRequests.count());
 
-        assertEquals(correlationId1, inFlightRequests.completeLastSent(dest).header.correlationId());
+        assertEquals(correlationId1, inFlightRequests.completeLastSent(destination.idString()).header.correlationId());
         assertEquals(0, inFlightRequests.count());
     }
 
     @Test
     public void testClearAll() {
-        int correlationId1 = addRequest(dest);
-        int correlationId2 = addRequest(dest);
+        int correlationId1 = addRequest(destination);
+        int correlationId2 = addRequest(destination);
 
-        List<NetworkClient.InFlightRequest> clearedRequests = TestUtils.toList(this.inFlightRequests.clearAll(dest));
+        List<NetworkClient.InFlightRequest> clearedRequests = TestUtils.toList(this.inFlightRequests.clearAll(destination.idString()));
         assertEquals(0, inFlightRequests.count());
         assertEquals(2, clearedRequests.size());
         assertEquals(correlationId1, clearedRequests.get(0).header.correlationId());
@@ -66,28 +67,28 @@ public class InFlightRequestsTest {
 
     @Test
     public void testCompleteNext() {
-        int correlationId1 = addRequest(dest);
-        int correlationId2 = addRequest(dest);
+        int correlationId1 = addRequest(destination);
+        int correlationId2 = addRequest(destination);
         assertEquals(2, inFlightRequests.count());
 
-        assertEquals(correlationId1, inFlightRequests.completeNext(dest).header.correlationId());
+        assertEquals(correlationId1, inFlightRequests.completeNext(destination.idString()).header.correlationId());
         assertEquals(1, inFlightRequests.count());
 
-        assertEquals(correlationId2, inFlightRequests.completeNext(dest).header.correlationId());
+        assertEquals(correlationId2, inFlightRequests.completeNext(destination.idString()).header.correlationId());
         assertEquals(0, inFlightRequests.count());
     }
 
     @Test(expected = IllegalStateException.class)
     public void testCompleteNextThrowsIfNoInflights() {
-        inFlightRequests.completeNext(dest);
+        inFlightRequests.completeNext(destination.idString());
     }
 
     @Test(expected = IllegalStateException.class)
     public void testCompleteLastSentThrowsIfNoInFlights() {
-        inFlightRequests.completeLastSent(dest);
+        inFlightRequests.completeLastSent(destination.idString());
     }
 
-    private int addRequest(String destination) {
+    private int addRequest(Node destination) {
         int correlationId = this.correlationId;
         this.correlationId += 1;
 

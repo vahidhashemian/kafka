@@ -351,7 +351,7 @@ public class Sender implements Runnable {
                     if (nextRequestHandler.isRetry())
                         time.sleep(nextRequestHandler.retryBackoffMs());
 
-                    ClientRequest clientRequest = client.newClientRequest(targetNode.idString(),
+                    ClientRequest clientRequest = client.newClientRequest(targetNode,
                             requestBuilder, now, true, nextRequestHandler);
                     transactionManager.setInFlightTransactionalRequestCorrelationId(clientRequest.correlationId());
                     log.debug("Sending transactional request {} to node {}", requestBuilder, targetNode);
@@ -404,9 +404,8 @@ public class Sender implements Runnable {
     }
 
     private ClientResponse sendAndAwaitInitProducerIdRequest(Node node) throws IOException {
-        String nodeId = node.idString();
         InitProducerIdRequest.Builder builder = new InitProducerIdRequest.Builder(null);
-        ClientRequest request = client.newClientRequest(nodeId, builder, time.milliseconds(), true, null);
+        ClientRequest request = client.newClientRequest(node, builder, time.milliseconds(), true, null);
         return NetworkClientUtils.sendAndReceive(client, request, time);
     }
 
@@ -480,7 +479,7 @@ public class Sender implements Runnable {
                     ProducerBatch batch = batches.get(tp);
                     completeBatch(batch, partResp, correlationId, now);
                 }
-                this.sensors.recordLatency(response.destination(), response.requestLatencyMs());
+                this.sensors.recordLatency(response.destination().idString(), response.requestLatencyMs());
             } else {
                 // this is the acks = 0 case, just complete all requests
                 for (ProducerBatch batch : batches.values()) {
@@ -693,10 +692,10 @@ public class Sender implements Runnable {
             }
         };
 
-        String nodeId = Integer.toString(destination);
-        ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0, callback);
+        Node node = metadata.fetch().nodeById(destination);
+        ClientRequest clientRequest = client.newClientRequest(node, requestBuilder, now, acks != 0, callback);
         client.send(clientRequest, now);
-        log.trace("Sent produce request to {}: {}", nodeId, requestBuilder);
+        log.trace("Sent produce request to {}: {}", destination, requestBuilder);
     }
 
     /**

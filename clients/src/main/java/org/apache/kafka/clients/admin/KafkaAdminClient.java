@@ -805,7 +805,7 @@ public class KafkaAdminClient extends AdminClient {
                         "Internal error sending %s to %s.", call.callName, node)));
                     continue;
                 }
-                ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true);
+                ClientRequest clientRequest = client.newClientRequest(node, requestBuilder, now, true);
                 log.trace("Sending {} to {}. correlationId={}", requestBuilder, node, clientRequest.correlationId());
                 client.send(clientRequest, now);
                 getOrCreateListValue(callsInFlight, node.idString()).add(call);
@@ -903,13 +903,13 @@ public class KafkaAdminClient extends AdminClient {
                     log.error("Internal server error on {}: server returned information about unknown " +
                         "correlation ID {}, requestHeader = {}", response.destination(), correlationId,
                         response.requestHeader());
-                    client.disconnect(response.destination());
+                    client.disconnect(response.destination().idString());
                     continue;
                 }
 
                 // Stop tracking this call.
                 correlationIdToCall.remove(correlationId);
-                List<Call> calls = callsInFlight.get(response.destination());
+                List<Call> calls = callsInFlight.get(response.destination().idString());
                 if ((calls == null) || (!calls.remove(call))) {
                     log.error("Internal server error on {}: ignoring call {} in correlationIdToCall " +
                         "that did not exist in callsInFlight", response.destination(), call);

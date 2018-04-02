@@ -44,11 +44,11 @@ final class InFlightRequests {
      * Add the given request to the queue for the connection it was directed to
      */
     public void add(NetworkClient.InFlightRequest request) {
-        String destination = request.destination;
-        Deque<NetworkClient.InFlightRequest> reqs = this.requests.get(destination);
+        String destinationId = request.destination.idString();
+        Deque<NetworkClient.InFlightRequest> reqs = this.requests.get(destinationId);
         if (reqs == null) {
             reqs = new ArrayDeque<>();
-            this.requests.put(destination, reqs);
+            this.requests.put(destinationId, reqs);
         }
         reqs.addFirst(request);
         inFlightRequestCount.incrementAndGet();

@@ -92,7 +92,7 @@ public class NetworkClientTest {
     public void testSendToUnreadyNode() {
         MetadataRequest.Builder builder = new MetadataRequest.Builder(Arrays.asList("test"), true);
         long now = time.milliseconds();
-        ClientRequest request = client.newClientRequest("5", builder, now, false);
+        ClientRequest request = client.newClientRequest(new Node(5, "host", 0), builder, now, false);
         client.send(request, now);
         client.poll(1, time.milliseconds());
     }
@@ -121,7 +121,7 @@ public class NetworkClientTest {
 
         ProduceRequest.Builder builder = ProduceRequest.Builder.forCurrentMagic((short) 1, 1000,
                 Collections.<TopicPartition, MemoryRecords>emptyMap());
-        ClientRequest request = client.newClientRequest(node.idString(), builder, time.milliseconds(), true);
+        ClientRequest request = client.newClientRequest(node, builder, time.milliseconds(), true);
         client.send(request, time.milliseconds());
         assertEquals("There should be 1 in-flight request after send", 1,
                 client.inFlightRequestCount(node.idString()));
@@ -141,7 +141,7 @@ public class NetworkClientTest {
                         Collections.<TopicPartition, MemoryRecords>emptyMap());
         TestCallbackHandler handler = new TestCallbackHandler();
         ClientRequest request = networkClient.newClientRequest(
-                node.idString(), builder, time.milliseconds(), true, handler);
+                node, builder, time.milliseconds(), true, handler);
         networkClient.send(request, time.milliseconds());
         networkClient.poll(1, time.milliseconds());
         assertEquals(1, networkClient.inFlightRequestCount());
@@ -186,8 +186,7 @@ public class NetworkClientTest {
                 1000, Collections.<TopicPartition, MemoryRecords>emptyMap());
         TestCallbackHandler handler = new TestCallbackHandler();
         long now = time.milliseconds();
-        ClientRequest request = client.newClientRequest(
-                node.idString(), builder, now, true, handler);
+        ClientRequest request = client.newClientRequest(node, builder, now, true, handler);
         client.send(request, now);
 
         // sleeping to make sure that the time since last send is greater than requestTimeOut
@@ -196,7 +195,7 @@ public class NetworkClientTest {
 
         assertEquals(1, responses.size());
         ClientResponse clientResponse = responses.get(0);
-        assertEquals(node.idString(), clientResponse.destination());
+        assertEquals(node, clientResponse.destination());
         assertTrue("Expected response to fail due to disconnection", clientResponse.wasDisconnected());
     }
 
@@ -206,17 +205,17 @@ public class NetworkClientTest {
         awaitReady(client, node);
         client.poll(1, time.milliseconds());
         assertTrue("The client should be ready", client.isReady(node, time.milliseconds()));
-        
+
         // leastloadednode should be our single node
         Node leastNode = client.leastLoadedNode(time.milliseconds());
         assertEquals("There should be one leastloadednode", leastNode.id(), node.id());
-        
+
         // sleep for longer than reconnect backoff
         time.sleep(reconnectBackoffMsTest);
-        
-        // CLOSE node 
+
+        // CLOSE node
         selector.serverDisconnect(node.idString());
-        
+
         client.poll(1, time.milliseconds());
         assertFalse("After we forced the disconnection the client is no longer ready.", client.ready(node, time.milliseconds()));
         leastNode = client.leastLoadedNode(time.milliseconds());
@@ -318,7 +317,7 @@ public class NetworkClientTest {
 
         MetadataRequest.Builder builder = new MetadataRequest.Builder(Collections.<String>emptyList(), true);
         long now = time.milliseconds();
-        ClientRequest request = client.newClientRequest(node.idString(), builder, now, true);
+        ClientRequest request = client.newClientRequest(node, builder, now, true);
         client.send(request, now);
         client.poll(requestTimeoutMs, now);
         assertEquals(1, client.inFlightRequestCount(node.idString()));
@@ -371,11 +370,11 @@ public class NetworkClientTest {
             }
         };
 
-        ClientRequest request1 = client.newClientRequest(node.idString(), builder, now, true, callback);
+        ClientRequest request1 = client.newClientRequest(node, builder, now, true, callback);
         client.send(request1, now);
         client.poll(0, now);
 
-        ClientRequest request2 = client.newClientRequest(node.idString(), builder, now, true, callback);
+        ClientRequest request2 = client.newClientRequest(node, builder, now, true, callback);
         client.send(request2, now);
         client.poll(0, now);
 

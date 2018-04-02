@@ -16,6 +16,7 @@
  */
 package org.apache.kafka.clients;
 
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.RequestHeader;
@@ -25,7 +26,7 @@ import org.apache.kafka.common.requests.RequestHeader;
  */
 public final class ClientRequest {
 
-    private final String destination;
+    private final Node destination;
     private final AbstractRequest.Builder<?> requestBuilder;
     private final int correlationId;
     private final String clientId;
@@ -34,7 +35,7 @@ public final class ClientRequest {
     private final RequestCompletionHandler callback;
 
     /**
-     * @param destination The brokerId to send the request to
+     * @param destination The broker node to send the request to
      * @param requestBuilder The builder for the request to make
      * @param correlationId The correlation id for this client request
      * @param clientId The client ID to use for the header
@@ -42,7 +43,7 @@ public final class ClientRequest {
      * @param expectResponse Should we expect a response message or is this request complete once it is sent?
      * @param callback A callback to execute when the response has been received (or null if no callback is necessary)
      */
-    public ClientRequest(String destination,
+    public ClientRequest(Node destination,
                          AbstractRequest.Builder<?> requestBuilder,
                          int correlationId,
                          String clientId,
@@ -86,7 +87,7 @@ public final class ClientRequest {
         return requestBuilder;
     }
 
-    public String destination() {
+    public Node destination() {
         return destination;
     }
 

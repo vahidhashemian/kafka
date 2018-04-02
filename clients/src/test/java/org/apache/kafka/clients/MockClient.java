@@ -160,7 +160,7 @@ public class MockClient implements KafkaClient {
         Iterator<ClientRequest> iter = requests.iterator();
         while (iter.hasNext()) {
             ClientRequest request = iter.next();
-            if (request.destination().equals(node)) {
+            if (request.destination().idString().equals(node)) {
                 short version = request.requestBuilder().latestAllowedVersion();
                 responses.add(new ClientResponse(request.makeHeader(version), request.callback(), request.destination(),
                         request.createdTimeMs(), now, true, null, null));
@@ -436,7 +436,7 @@ public class MockClient implements KafkaClient {
     public int inFlightRequestCount(String node) {
         int result = 0;
         for (ClientRequest req : requests) {
-            if (req.destination().equals(node))
+            if (req.destination().idString().equals(node))
                 ++result;
         }
         return result;
@@ -453,15 +453,15 @@ public class MockClient implements KafkaClient {
     }
 
     @Override
-    public ClientRequest newClientRequest(String nodeId, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
+    public ClientRequest newClientRequest(Node node, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
                                           boolean expectResponse) {
-        return newClientRequest(nodeId, requestBuilder, createdTimeMs, expectResponse, null);
+        return newClientRequest(node, requestBuilder, createdTimeMs, expectResponse, null);
     }
 
     @Override
-    public ClientRequest newClientRequest(String nodeId, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
+    public ClientRequest newClientRequest(Node node, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
                                           boolean expectResponse, RequestCompletionHandler callback) {
-        return new ClientRequest(nodeId, requestBuilder, 0, "mockClientId", createdTimeMs,
+        return new ClientRequest(node, requestBuilder, 0, "mockClientId", createdTimeMs,
                 expectResponse, callback);
     }
 

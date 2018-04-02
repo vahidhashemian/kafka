@@ -254,13 +254,13 @@ public class NetworkClient implements KafkaClient {
         for (InFlightRequest request : inFlightRequests.clearAll(nodeId)) {
             if (request.isInternalRequest) {
                 if (request.header.apiKey() == ApiKeys.METADATA) {
-                    metadataUpdater.handleDisconnection(request.destination);
+                    metadataUpdater.handleDisconnection(request.destination.idString());
                 }
             } else {
                 requestTypes.add(request.header.apiKey());
                 abortedSends.add(new ClientResponse(request.header,
-                        request.callback, request.destination, request.createdTimeMs, now,
-                        true, null, null));
+                        request.callback, metadataUpdater.getNodeById(request.destination.idString()), request.createdTimeMs,
+                        now, true, null, null));
             }
         }
         connectionStates.disconnected(nodeId, now);
@@ -282,7 +282,7 @@ public class NetworkClient implements KafkaClient {
         selector.close(nodeId);
         for (InFlightRequest request : inFlightRequests.clearAll(nodeId))
             if (request.isInternalRequest && request.header.apiKey() == ApiKeys.METADATA)
-                metadataUpdater.handleDisconnection(request.destination);
+                metadataUpdater.handleDisconnection(request.destination.idString());
         connectionStates.remove(nodeId);
     }
 
@@ -359,13 +359,13 @@ public class NetworkClient implements KafkaClient {
     }
 
     private void sendInternalMetadataRequest(MetadataRequest.Builder builder,
-                                             String nodeConnectionId, long now) {
-        ClientRequest clientRequest = newClientRequest(nodeConnectionId, builder, now, true);
+                                             Node node, long now) {
+        ClientRequest clientRequest = newClientRequest(node, builder, now, true);
         doSend(clientRequest, true, now);
     }
 
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
-        String nodeId = clientRequest.destination();
+        String nodeId = clientRequest.destination().idString();
         if (!isInternalRequest) {
             // If this request came from outside the NetworkClient, validate
             // that we can send data.  If the request is internal, we trust
@@ -408,19 +408,19 @@ public class NetworkClient implements KafkaClient {
     }
 
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now, AbstractRequest request) {
-        String nodeId = clientRequest.destination();
+        Node node = clientRequest.destination();
         RequestHeader header = clientRequest.makeHeader(request.version());
         if (log.isDebugEnabled()) {
             int latestClientVersion = clientRequest.apiKey().latestVersion();
             if (header.apiVersion() == latestClientVersion) {
                 log.trace("Sending {} {} with correlation id {} to node {}", clientRequest.apiKey(), request,
-                        clientRequest.correlationId(), nodeId);
+                        clientRequest.correlationId(), node.idString());
             } else {
                 log.debug("Using older server API v{} to send {} {} with correlation id {} to node {}",
-                        header.apiVersion(), clientRequest.apiKey(), request, clientRequest.correlationId(), nodeId);
+                        header.apiVersion(), clientRequest.apiKey(), request, clientRequest.correlationId(), node.idString());
             }
         }
-        Send send = request.toSend(nodeId, header);
+        Send send = request.toSend(node.idString(), header);
         InFlightRequest inFlightRequest = new InFlightRequest(
                 header,
                 clientRequest.createdTimeMs(),
@@ -625,7 +625,7 @@ public class NetworkClient implements KafkaClient {
             if (!request.isInternalRequest)
                 responses.add(request.disconnected(now));
             else if (request.header.apiKey() == ApiKeys.METADATA)
-                metadataUpdater.handleDisconnection(request.destination);
+                metadataUpdater.handleDisconnection(request.destination.idString());
         }
     }
 
@@ -700,23 +700,23 @@ public class NetworkClient implements KafkaClient {
 
     private void handleApiVersionsResponse(List<ClientResponse> responses,
                                            InFlightRequest req, long now, ApiVersionsResponse apiVersionsResponse) {
-        final String node = req.destination;
+        final String nodeId = req.destination.idString();
         if (apiVersionsResponse.error() != Errors.NONE) {
             if (req.request.version() == 0 || apiVersionsResponse.error() != Errors.UNSUPPORTED_VERSION) {
                 log.warn("Received error {} from node {} when making an ApiVersionsRequest with correlation id {}. Disconnecting.",
-                        apiVersionsResponse.error(), node, req.header.correlationId());
-                this.selector.close(node);
-                processDisconnection(responses, node, now, ChannelState.LOCAL_CLOSE);
+                        apiVersionsResponse.error(), nodeId, req.header.correlationId());
+                this.selector.close(nodeId);
+                processDisconnection(responses, nodeId, now, ChannelState.LOCAL_CLOSE);
             } else {
-                nodesNeedingApiVersionsFetch.put(node, new ApiVersionsRequest.Builder((short) 0));
+                nodesNeedingApiVersionsFetch.put(nodeId, new ApiVersionsRequest.Builder((short) 0));
             }
             return;
         }
         NodeApiVersions nodeVersionInfo = new NodeApiVersions(apiVersionsResponse.apiVersions());
-        apiVersions.update(node, nodeVersionInfo);
-        this.connectionStates.ready(node);
+        apiVersions.update(nodeId, nodeVersionInfo);
+        this.connectionStates.ready(nodeId);
         if (log.isDebugEnabled()) {
-            log.debug("Recorded API versions for node {}: {}", node, nodeVersionInfo);
+            log.debug("Recorded API versions for node {}: {}", nodeId, nodeVersionInfo);
         }
     }
 
@@ -761,11 +761,11 @@ public class NetworkClient implements KafkaClient {
         Iterator<Map.Entry<String, ApiVersionsRequest.Builder>> iter = nodesNeedingApiVersionsFetch.entrySet().iterator();
         while (iter.hasNext()) {
             Map.Entry<String, ApiVersionsRequest.Builder> entry = iter.next();
-            String node = entry.getKey();
-            if (selector.isChannelReady(node) && inFlightRequests.canSendMore(node)) {
-                log.debug("Initiating API versions fetch from node {}.", node);
+            String nodeId = entry.getKey();
+            if (selector.isChannelReady(nodeId) && inFlightRequests.canSendMore(nodeId)) {
+                log.debug("Initiating API versions fetch from node {}.", nodeId);
                 ApiVersionsRequest.Builder apiVersionRequestBuilder = entry.getValue();
-                ClientRequest clientRequest = newClientRequest(node, apiVersionRequestBuilder, now, true);
+                ClientRequest clientRequest = newClientRequest(metadataUpdater.getNodeById(nodeId), apiVersionRequestBuilder, now, true);
                 doSend(clientRequest, true, now);
                 iter.remove();
             }
@@ -818,6 +818,11 @@ public class NetworkClient implements KafkaClient {
         @Override
         public List<Node> fetchNodes() {
             return metadata.fetch().nodes();
+        }
+
+        @Override
+        public Node getNodeById(String id) {
+            return metadata.fetch().nodeById(Integer.parseInt(id));
         }
 
         @Override
@@ -924,7 +929,7 @@ public class NetworkClient implements KafkaClient {
 
 
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
-                sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
+                sendInternalMetadataRequest(metadataRequest, node, now);
                 return requestTimeoutMs;
             }
 
@@ -953,21 +958,21 @@ public class NetworkClient implements KafkaClient {
     }
 
     @Override
-    public ClientRequest newClientRequest(String nodeId, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
+    public ClientRequest newClientRequest(Node node, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
                                           boolean expectResponse) {
-        return newClientRequest(nodeId, requestBuilder, createdTimeMs, expectResponse, null);
+        return newClientRequest(node, requestBuilder, createdTimeMs, expectResponse, null);
     }
 
     @Override
-    public ClientRequest newClientRequest(String nodeId, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
+    public ClientRequest newClientRequest(Node node, AbstractRequest.Builder<?> requestBuilder, long createdTimeMs,
                                           boolean expectResponse, RequestCompletionHandler callback) {
-        return new ClientRequest(nodeId, requestBuilder, correlation++, clientId, createdTimeMs, expectResponse,
+        return new ClientRequest(node, requestBuilder, correlation++, clientId, createdTimeMs, expectResponse,
                 callback);
     }
 
     static class InFlightRequest {
         final RequestHeader header;
-        final String destination;
+        final Node destination;
         final RequestCompletionHandler callback;
         final boolean expectResponse;
         final AbstractRequest request;
@@ -978,7 +983,7 @@ public class NetworkClient implements KafkaClient {
 
         public InFlightRequest(RequestHeader header,
                                long createdTimeMs,
-                               String destination,
+                               Node destination,
                                RequestCompletionHandler callback,
                                boolean expectResponse,
                                boolean isInternalRequest,
